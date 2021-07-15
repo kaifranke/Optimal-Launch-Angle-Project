@@ -1,0 +1,181 @@
+library(dplyr)
+library(ggplot2)
+
+
+newn = read.csv("C:/Users/kaifr/Downloads/Baseball Research/19-21 Data.csv")
+
+# Data Cleaning and Preparation #
+
+agg = newn %>% # Aggregate data frame
+  group_by(batter_name) %>%
+  filter(launch_speed >= 0,
+         description != "foul",
+         events != "sac_bunt") %>%
+  summarize(n = n(),
+            HHP = (sum(launch_speed >= 95) / n()) * 100,
+            avgEV = mean(launch_speed, na.rm = T),
+            medEV = median(launch_speed, na.rm = T),
+            EVdiff = avgEV - medEV,
+            avgLA = mean(launch_angle, na.rm = T),
+            medLA = median(launch_angle, na.rm = T),
+            wOBAcon = mean(woba_value, na.rm = T),
+            xwOBAcon = mean(estimated_woba_using_speedangle, na.rm = T),
+            xBABIP = mean(estimated_ba_using_speedangle, na.rm = T),
+            LDp = (sum(launch_angle >= 10 & launch_angle < 25) / n() * 100),
+            FBp = (sum(launch_angle >= 25 & launch_angle < 50) / n() * 100),
+            LFr = LDp / FBp,
+            laQ1 = quantile(launch_angle, .25),
+            laQ3 = quantile(launch_angle, .75),
+            IQR = laQ3 - laQ1) %>%
+  filter(n >= 250) %>%
+  arrange(-medLA)
+
+allbb = newn %>%  # Batted ball data frame
+  filter(launch_speed >= 0,
+         description != "foul",
+         events != "sac_bunt")
+
+
+
+### Locastro and Judge Visualization ###
+
+JaL = allbb %>%
+  filter(batter_name %in% c("Judge, Aaron", "Locastro, Tim"))
+
+ggplot(JaL, aes(launch_angle)) + # LA Distribution Visual
+  geom_density(fill = "light blue", alpha = 0.5) +
+  facet_wrap(~batter_name) +
+  theme_bw() +
+  xlab("Launch Angle") +
+  ylab("Density") +
+  ggtitle("Judge and Locastro LA Distributions") + 
+  geom_vline(data = data.frame(xint=1,batter_name = "Judge, Aaron"), aes(xintercept = 29), size = 1, color = "navy") +
+  geom_vline(data = data.frame(xint=1,batter_name = "Locastro, Tim"), aes(xintercept = 16), size = 1, color = "maroon") +
+  labs(caption = "Twitter: @kaifranke3")
+
+
+
+
+## Making New Dataframe for the model ##
+
+kmcdf = agg %>%
+  select(medEV, medLA)
+
+
+### Elbow Method ###
+
+elb <- (nrow(kmcdf)-1)*sum(apply(kmcdf,2,var))
+for (i in 2:15) elb[i] <- sum(kmeans(kmcdf,
+                                     centers=i)$withinss)
+
+
+elbd = as.data.frame(elb)
+num = as.data.frame(c(1:15))
+
+elbow = cbind(num, elbd)
+elbow$elb = as.integer(elbow$elb)
+
+ggplot(elbow, aes(`c(1:15)`, elb)) +
+  geom_line(color = "black", size = 1) +
+  geom_point(size = 2, color = "red") +
+  scale_x_continuous(breaks = 1:15) +
+  theme_bw() +
+  ylab("Within Groups Sum of Squares") +
+  xlab("K Values") +
+  ggtitle("K-Means Clustering Elbow Plot") +
+  labs(caption = "Twitter: @kaifranke3")
+
+## Clustering ##
+
+k.data3 = kmeans(kmcdf, centers = 3) 
+
+clusters = as.data.frame(k.data3$cluster)
+
+kmc = cbind(kmcdf, clusters)
+
+kmc = kmc %>%
+  mutate(cluster = as.character(k.data3$cluster))
+
+agg2 = inner_join(agg, kmc, by = c("medLA", "medEV"))
+
+agg2 = distinct(agg2, batter_name, .keep_all = T)
+
+ggplot(agg2, aes(medEV, medLA, color = cluster)) + # Cluster plot
+  geom_point(size = 3) +
+  theme_bw() +
+  xlab("Median Exit Velocity") +
+  ylab("Median Launch Angle") +
+  ggtitle("2019-21 Hitter Clusters") +
+  labs(color = "Cluster", caption = "Twitter: @kaifranke3") 
+
+
+agg2 %>%
+  group_by(cluster) %>%
+  summarize(HHP = mean(HHP),
+            EV = mean(medEV),  
+            LA = mean(medLA),
+            wOBAcon = mean(wOBAcon),
+            xwOBAcon = mean(xwOBAcon),
+            xBABIP = mean(xBABIP),
+            LDp = mean(LDp),
+            FBp = mean(FBp),
+            LFr = LDp / FBp,
+            n = mean(n)) %>%
+  arrange(desc(wOBAcon))
+
+
+
+
+highlight_df <- agg2 %>%  # Highlighting Judge and Locastro plot prepartation
+  filter(batter_name %in% c("Locastro, Tim", "Judge, Aaron"))
+
+ggplot(agg2, aes(medEV, medLA, color = cluster)) + # Highlighting Judge and Locastro plot
+  geom_point(size = 3) +
+  theme_bw() +
+  xlab("Median Exit Velocity") +
+  ylab("Median Launch Angle") +
+  ggtitle("Locastro and Judge Cluster") +
+  labs(color = "Cluster", caption = "Twitter: @kaifranke3") +
+  geom_text(aes(label=ifelse(batter_name == "Locastro, Tim",as.character(batter_name),'')),hjust=0.3,vjust=-1, color = "black") +
+  geom_text(aes(label=ifelse(batter_name == "Judge, Aaron",as.character(batter_name),'')),hjust=0.9,vjust=-1, color = "black") +
+  geom_point(data=highlight_df, 
+             aes(medEV, medLA), 
+             color='black',
+             size=3)
+
+
+quantile(agg2$medEV, c(.25, .75)) # Getting Middle 50%
+
+agg2 = agg2 %>% # Adding labels to hitters
+  mutate(evLev = ifelse(medEV < 89.6, "slow", NA),
+         evLev = ifelse(medEV >= 89.6 & medEV < 92.5, "average", evLev),
+         evLev = ifelse(medEV >= 92.5, "fast", evLev))
+
+
+
+
+ggplot(agg2, aes(medEV, fill = cluster)) +  # Exit velo distribution with middle 50%
+  geom_density(alpha = 0.3) +
+  theme_bw() +
+  xlab("Median Exit Velocity") +
+  ylab("Density") +
+  ggtitle("2019-21 Hitter Clusters") +
+  labs(fill = "Cluster", caption = "Twitter: @kaifranke3") +
+  geom_vline(xintercept = c(89.6, 92.5), size = 1)
+
+
+
+
+agg2 %>%  # Aggregate data for launch angle clusters and exit velocity labels
+  group_by(cluster, evLev) %>%
+  summarize(HHP = mean(HHP),
+            EV = mean(medEV),  
+            LA = mean(medLA),
+            wOBAcon = mean(wOBAcon),
+            xwOBAcon = mean(xwOBAcon),
+            xBABIP = mean(xBABIP),
+            LDp = mean(LDp),
+            FBp = mean(FBp),
+            LFr = LDp / FBp,
+            n = mean(n)) %>%
+  arrange(desc(wOBAcon))
