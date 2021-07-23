@@ -64,10 +64,14 @@ kmcdf = agg %>%
 
 ### Elbow Method ###
 
+
+## Borrowed a little code from StackOverflow ##
+
 elb <- (nrow(kmcdf)-1)*sum(apply(kmcdf,2,var))
 for (i in 2:15) elb[i] <- sum(kmeans(kmcdf,
                                      centers=i)$withinss)
-
+                                                                          
+## ##
 
 elbd = as.data.frame(elb)
 num = as.data.frame(c(1:15))
